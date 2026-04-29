@@ -1,0 +1,9 @@
+/.west
+/zephyr
+/zmk
+/zmk-*
+/modules
+
+/root/*
+!/root/.bashrc
+!/root/entrypoint.sh
