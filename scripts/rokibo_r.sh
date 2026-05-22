@@ -9,4 +9,4 @@ west build \
   -- \
   -DZMK_CONFIG=/workspaces/zmk-config/config \
   -DZMK_EXTRA_MODULES=/workspaces/zmk-config \
-  -DSHIELD=rokibo_right
+  -DSHIELD="rokibo_right rgbled_adapter"
