@@ -1,0 +1,18 @@
+services:
+  zmk-rokibo_0:
+    image: docker.io/zmkfirmware/zmk-dev-arm:3.5
+    volumes:
+      - ./root:/root
+      - .:/workspaces/zmk
+      - ../zmk-config-rokibo_0:/workspaces/zmk-config
+      - ../zmk-modules:/workspaces/zmk-modules
+    environment:
+      - WORKSPACE_DIR=/workspaces/zmk
+    working_dir: /workspaces/zmk
+    ports:
+      - "13000:3000"
+    security_opt:
+      - label:disable
+    tty: true
+    stdin_open: true
+    entrypoint: bash /root/entrypoint.sh
