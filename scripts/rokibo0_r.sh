@@ -1,12 +1,8 @@
-#!/bin/bash -x
+#!/usr/bin/env bash
+set -euo pipefail
 
-cd $WORKSPACE_DIR
-west build \
-  -s zmk/app \
-  -d ../zmk-config/build/right \
-  -b seeeduino_xiao_ble \
-  -S studio-rpc-usb-uart \
-  -- \
-  -DZMK_CONFIG=/workspaces/zmk-config/config \
-  -DZMK_EXTRA_MODULES=/workspaces/zmk-config \
-  -DSHIELD="rokibo_0_right rgbled_adapter"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/zmk.py" build \
+  --compose "$SCRIPT_DIR/../docker-compose-rokibo_0.yml" \
+  --target rokibo_0-right \
+  "$@"

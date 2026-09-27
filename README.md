@@ -2,7 +2,7 @@
 
 This repository is a workspace for building ZMK firmware with Docker Compose.
 
-The repository does not track fetched ZMK/Zephyr source trees or build artifacts. It only tracks the Compose definitions, container initialization files, and keyboard-specific `west build` helper scripts.
+The repository does not track fetched ZMK/Zephyr source trees or build artifacts. Compose files and each config repository's `build.yaml` are the source of truth for local builds.
 
 ## Requirements
 
@@ -47,35 +47,67 @@ Both Compose files use `docker.io/zmkfirmware/zmk-dev-arm:3.5` and mount this re
 
 ## Build
 
-Run the appropriate script inside the container.
+Use the generic CLI. It reads the service and bind mounts from the Compose file, then reads `board`, `shield`, `snippet`, `cmake-args`, and `artifact-name` from the mounted config's `build.yaml`.
 
-### Rokibo
-
-```sh
-./scripts/rokibo_l.sh
-./scripts/rokibo_r.sh
-./scripts/rokibo_reset.sh
-```
-
-| Script | Shield | Output directory |
-| --- | --- | --- |
-| `scripts/rokibo_l.sh` | `rokibo_left` | `/workspaces/zmk-config/build/left` |
-| `scripts/rokibo_r.sh` | `rokibo_right` | `/workspaces/zmk-config/build/right` |
-| `scripts/rokibo_reset.sh` | `settings_reset` | `/workspaces/zmk-config/build/reset` |
-
-### roBa
+PyYAML is required on the host:
 
 ```sh
-./scripts/roba_l.sh
-./scripts/roba_r.sh
+python3 -m pip install pyyaml
 ```
 
-| Script | Shield | Output directory |
-| --- | --- | --- |
-| `scripts/roba_l.sh` | `roBa_L` | `/workspaces/zmk-config/build/left` |
-| `scripts/roba_r.sh` | `roBa_R` | `/workspaces/zmk-config/build/right` |
+List targets:
 
-All build scripts target the `seeeduino_xiao_ble` board and enable the `studio-rpc-usb-uart` snippet.
+```sh
+./scripts/zmk-build.sh list-targets \
+  --compose docker-compose-rokibo_0.yml
+```
+
+Build one target:
+
+```sh
+./scripts/zmk-build.sh \
+  --compose docker-compose-rokibo_0.yml \
+  --target rokibo_0-right
+```
+
+The UF2 is expected at:
+
+```text
+../zmk-config-rokibo_0/build/rokibo_0-right/zephyr/zmk.uf2
+```
+
+Preview the generated Docker and west commands without starting Docker:
+
+```sh
+./scripts/zmk-build.sh \
+  --compose docker-compose-rokibo_0.yml \
+  --target rokibo_0-right \
+  --dry-run
+```
+
+## Build and flash
+
+Build and copy the UF2 to `/media/$USER/XIAO-SENSE/`:
+
+```sh
+./scripts/zmk-flash.sh \
+  --compose docker-compose-rokibo_0.yml \
+  --target rokibo_0-right
+```
+
+If no keyboard is connected, the command warns and waits. Use `--no-wait` to exit immediately instead. The script writes only when `/media/$USER/XIAO-SENSE/` is writable and contains `INFO_UF2.TXT` or `CURRENT.UF2`.
+
+For `zmk-config-rokibo_0`, the current targets are:
+
+| Target | Board | Shield | Snippet |
+| --- | --- | --- | --- |
+| `rokibo_0-right` | `seeeduino_xiao_ble` | `rokibo_0_right rgbled_adapter` | `studio-rpc-usb-uart` |
+| `rokibo_0-left` | `seeeduino_xiao_ble` | `rokibo_0_left rgbled_adapter` | none |
+| `rokibo_0-reset` | `seeeduino_xiao_ble` | `settings_reset` | none |
+
+Each entry must have a unique, path-safe `artifact-name`. Add a new device by adding a Compose file and a config repository with `build.yaml`; do not add a device-specific west script.
+
+The old `rokibo0_l.sh`, `rokibo0_r.sh`, and `rokibo0_reset.sh` files remain as compatibility wrappers.
 
 ## Generated Files
 
