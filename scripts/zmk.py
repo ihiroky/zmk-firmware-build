@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ CONTAINER_WORKSPACE = "/workspaces/zmk"
 CONTAINER_CONFIG = "/workspaces/zmk-config"
 CONTAINER_MODULES = "/workspaces/zmk-modules"
 USB_MARKERS = ("INFO_UF2.TXT", "CURRENT.UF2")
+MEDIA_ROOTS = (Path("/media"), Path("/run/media"))
 TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -328,14 +330,13 @@ def usb_candidates() -> list[Path]:
     user = os.environ.get("USER")
     if not user:
         return []
-    media_root = Path("/media") / user / "XIAO-SENSE"
-    if not media_root.is_dir():
-        return []
-    if not os.access(media_root, os.W_OK):
-        return []
-    if any((media_root / marker).is_file() for marker in USB_MARKERS):
-        return [media_root]
-    return []
+    candidates: list[Path] = []
+    for media_root in (root / user / "XIAO-SENSE" for root in MEDIA_ROOTS):
+        if not media_root.is_dir() or not os.access(media_root, os.W_OK):
+            continue
+        if any((media_root / marker).is_file() for marker in USB_MARKERS):
+            candidates.append(media_root)
+    return candidates
 
 
 def find_usb(*, no_wait: bool) -> Path:
@@ -360,21 +361,42 @@ def find_usb(*, no_wait: bool) -> Path:
 def flash_artifact(artifact: Path, mount: Path) -> None:
     if not mount.is_dir() or not os.access(mount, os.W_OK):
         fail(f"USBデバイスへ書き込めません: {mount}")
-    partial = mount / f"{artifact.stem}.uf2.part"
-    destination = mount / f"{artifact.stem}.uf2"
+
+    destination = mount / "zmk.uf2"
+    backup: Path | None = None
     try:
-        with artifact.open("rb") as source, partial.open("wb") as target:
+        if destination.is_file():
+            with destination.open("rb") as source, tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix="zmk-uf2-backup-",
+                suffix=".uf2",
+                dir="/tmp",
+                delete=False,
+            ) as target:
+                backup = Path(target.name)
+                shutil.copyfileobj(source, target)
+                target.flush()
+                os.fsync(target.fileno())
+            print(f"既存のzmk.uf2をバックアップしました: {backup}")
+        else:
+            print("デバイス上に既存のzmk.uf2がないため、バックアップを作成しません。")
+    except OSError as error:
+        if backup is not None:
+            try:
+                backup.unlink()
+            except OSError:
+                pass
+        fail(f"既存のzmk.uf2をバックアップできません: {error}")
+
+    try:
+        with artifact.open("rb") as source, destination.open("wb") as target:
             shutil.copyfileobj(source, target)
             target.flush()
             os.fsync(target.fileno())
-        os.replace(partial, destination)
         os.sync()
     except OSError as error:
-        try:
-            partial.unlink()
-        except OSError:
-            pass
-        fail(f"UF2を書き込めません: {error}")
+        backup_text = str(backup) if backup is not None else "なし"
+        fail(f"UF2を書き込めません: {error}（バックアップ: {backup_text}）")
     print(f"書き込み完了: {destination}")
 
 

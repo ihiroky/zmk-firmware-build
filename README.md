@@ -87,7 +87,7 @@ Preview the generated Docker and west commands without starting Docker:
 
 ## Build and flash
 
-Build and copy the UF2 to `/media/$USER/XIAO-SENSE/`:
+Build and copy the UF2 to `/media/$USER/XIAO-SENSE/zmk.uf2` or `/run/media/$USER/XIAO-SENSE/zmk.uf2`:
 
 ```sh
 ./scripts/zmk-flash.sh \
@@ -95,7 +95,7 @@ Build and copy the UF2 to `/media/$USER/XIAO-SENSE/`:
   --target rokibo_0-right
 ```
 
-If no keyboard is connected, the command warns and waits. Use `--no-wait` to exit immediately instead. The script writes only when `/media/$USER/XIAO-SENSE/` is writable and contains `INFO_UF2.TXT` or `CURRENT.UF2`.
+If no keyboard is connected, the command warns and waits. Use `--no-wait` to exit immediately instead. The script writes only when either mount point is writable and contains `INFO_UF2.TXT` or `CURRENT.UF2`. Before writing, an existing `zmk.uf2` is backed up to `/tmp/zmk-uf2-backup-*.uf2`.
 
 For `zmk-config-rokibo_0`, the current targets are:
 
