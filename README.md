@@ -49,11 +49,7 @@ Both Compose files use `docker.io/zmkfirmware/zmk-dev-arm:3.5` and mount this re
 
 Use the generic CLI. It reads the service and bind mounts from the Compose file, then reads `board`, `shield`, `snippet`, `cmake-args`, and `artifact-name` from the mounted config's `build.yaml`.
 
-PyYAML is required on the host:
-
-```sh
-python3 -m pip install pyyaml
-```
+The CLI uses only the Python standard library and parses `build.yaml` with a built-in parser, so no host packages need to be installed. The parser covers the block mappings/sequences, flow lists (`[ "a", "b" ]`), quotes, and comments used by build.yaml files; unsupported constructs are reported as errors.
 
 List targets:
 

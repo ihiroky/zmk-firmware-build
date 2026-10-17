@@ -30,6 +30,10 @@ class UserError(Exception):
     """An expected error that should be shown without a traceback."""
 
 
+class YamlError(Exception):
+    """Raised when build.yaml cannot be parsed by the built-in parser."""
+
+
 @dataclass(frozen=True)
 class ComposeInfo:
     path: Path
@@ -160,14 +164,174 @@ def load_compose(compose_arg: str) -> ComposeInfo:
     return ComposeInfo(compose_path, service_name, workspace, config, modules, tuple(extra_modules))
 
 
+DOCUMENT_MARKERS = ("---", "...")
+MAPPING_ENTRY_RE = re.compile(r"""^(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^:\s][^:]*?)\s*:(?:\s|$)""")
+SIMPLE_YAML_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "0": "\0"}
+SIMPLE_YAML_NULLS = ("~", "null", "Null", "NULL")
+
+
+def strip_yaml_comment(line: str) -> str:
+    in_single = False
+    in_double = False
+    for index, char in enumerate(line):
+        if char == '"' and not in_single:
+            in_double = not in_double
+        elif char == "'" and not in_double:
+            in_single = not in_single
+        elif char == "#" and not in_single and not in_double and (index == 0 or line[index - 1] in " \t"):
+            return line[:index]
+    return line
+
+
+def split_flow(text: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote = ""
+    for char in text:
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = ""
+            continue
+        if char in "\"'":
+            quote = char
+            current.append(char)
+        elif char in "[{":
+            depth += 1
+            current.append(char)
+        elif char in "]}":
+            depth -= 1
+            current.append(char)
+        elif char == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    tail = "".join(current).strip()
+    if tail or parts:
+        parts.append(tail)
+    return [part.strip() for part in parts]
+
+
+def split_mapping_entry(text: str) -> tuple[str, str]:
+    if not MAPPING_ENTRY_RE.match(text):
+        raise YamlError(f"mappingのentryとして解釈できません: {text}")
+    key, _, value = text.partition(":")
+    key = key.strip()
+    if len(key) >= 2 and key[0] == key[-1] and key[0] in "\"'":
+        key = parse_yaml_scalar(key)
+    if not isinstance(key, str) or not key:
+        raise YamlError(f"keyが空です: {text}")
+    return key, value.strip()
+
+
+def parse_yaml_scalar(text: str) -> Any:
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        body = text[1:-1]
+        return re.sub(r"\\(.)", lambda match: SIMPLE_YAML_ESCAPES.get(match.group(1), match.group(1)), body)
+    if len(text) >= 2 and text.startswith("'") and text.endswith("'"):
+        return text[1:-1].replace("''", "'")
+    if text.startswith("["):
+        if not text.endswith("]"):
+            raise YamlError(f"flow sequenceが閉じていません: {text}")
+        return [parse_yaml_scalar(part) for part in split_flow(text[1:-1])]
+    if text.startswith("{"):
+        if not text.endswith("}"):
+            raise YamlError(f"flow mappingが閉じていません: {text}")
+        inner = text[1:-1].strip()
+        result: dict[str, Any] = {}
+        if inner:
+            for part in split_flow(inner):
+                key, value = split_mapping_entry(part)
+                result[key] = parse_yaml_scalar(value) if value else None
+        return result
+    if text in SIMPLE_YAML_NULLS:
+        return None
+    return text
+
+
+class BlockParser:
+    """Indentation-based parser for the block subset used by build.yaml."""
+
+    def __init__(self, lines: list[tuple[int, str]]) -> None:
+        self.lines = lines
+
+    def parse(self, index: int) -> tuple[Any, int]:
+        indent, content = self.lines[index]
+        if content == "-" or content.startswith("- "):
+            return self.parse_sequence(index, indent)
+        return self.parse_mapping(index, indent)
+
+    def parse_mapping(self, index: int, indent: int) -> tuple[dict[str, Any], int]:
+        result: dict[str, Any] = {}
+        while index < len(self.lines):
+            line_indent, content = self.lines[index]
+            if line_indent != indent:
+                break
+            if content == "-" or content.startswith("- "):
+                break
+            key, value_text = split_mapping_entry(content)
+            if value_text:
+                result[key] = parse_yaml_scalar(value_text)
+                index += 1
+            elif index + 1 < len(self.lines) and self.lines[index + 1][0] > indent:
+                result[key], index = self.parse(index + 1)
+            else:
+                result[key] = None
+                index += 1
+        return result, index
+
+    def parse_sequence(self, index: int, indent: int) -> tuple[list[Any], int]:
+        items: list[Any] = []
+        while index < len(self.lines):
+            line_indent, content = self.lines[index]
+            if line_indent != indent:
+                break
+            if not (content == "-" or content.startswith("- ")):
+                break
+            body = content[1:].strip()
+            if not body:
+                if index + 1 < len(self.lines) and self.lines[index + 1][0] > indent:
+                    value, index = self.parse(index + 1)
+                else:
+                    value, index = None, index + 1
+            elif MAPPING_ENTRY_RE.match(body):
+                self.lines[index] = (indent + content.index(body), body)
+                value, index = self.parse(index)
+            else:
+                value, index = parse_yaml_scalar(body), index + 1
+            items.append(value)
+        return items, index
+
+
+def parse_simple_yaml(text: str) -> Any:
+    lines: list[tuple[int, str]] = []
+    for raw in text.splitlines():
+        stripped = strip_yaml_comment(raw).rstrip()
+        if not stripped.strip() or stripped.strip() in DOCUMENT_MARKERS:
+            continue
+        indentation = stripped[: len(stripped) - len(stripped.lstrip())]
+        if "\t" in indentation:
+            raise YamlError("インデントにタブは使えません")
+        lines.append((len(indentation), stripped.strip()))
+    if not lines:
+        return None
+    parser = BlockParser(lines)
+    value, index = parser.parse(0)
+    if index != len(lines):
+        raise YamlError(f"解釈できない行があります: {lines[index][1]}")
+    return value
+
+
 def load_yaml(path: Path) -> dict[str, Any]:
     try:
-        import yaml  # type: ignore
-    except ImportError:
-        fail("PythonのPyYAMLが必要です。`python3 -m pip install pyyaml`後に再実行してください。")
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        fail(f"build.yamlを読み込めません: {error}")
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as error:
+        data = parse_simple_yaml(text)
+    except YamlError as error:
         fail(f"build.yamlを読み込めません: {error}")
     if not isinstance(data, dict):
         fail(f"build.yamlのルートがmappingではありません: {path}")
